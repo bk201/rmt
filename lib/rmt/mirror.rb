@@ -143,6 +143,14 @@ class RMT::Mirror
     @downloader.destination_dir = @repository_dir
     @downloader.cache_dir = nil
 
+    all_rpms = []
+    Dir.chdir(@repository_dir) do
+      all_rpms = all_rpms + Dir["**/*.rpm"]
+      all_rpms = all_rpms + Dir["**/*.drpm"]
+    end
+    # convert to hash for faster search
+    all_rpms = Hash[all_rpms.collect { |v| [v, true] }]
+
     failed_downloads = []
     deltainfo_files.each do |filename|
       parser = RMT::Rpm::DeltainfoXmlParser.new(
@@ -150,6 +158,13 @@ class RMT::Mirror
         @mirror_src
       )
       parser.parse
+
+      parser.referenced_files.each do |f|
+        if all_rpms.key?(f.location)
+          all_rpms.delete(f.location)
+        end
+      end
+
       to_download = parsed_files_after_dedup(@repository_dir, parser.referenced_files)
       failed_downloads.concat(@downloader.download_multi(to_download, ignore_errors: true)) unless to_download.empty?
     end
@@ -160,8 +175,21 @@ class RMT::Mirror
         @mirror_src
       )
       parser.parse
+      parser.referenced_files.each do |f|
+        if all_rpms.key?(f.location)
+          all_rpms.delete(f.location)
+        end
+      end
       to_download = parsed_files_after_dedup(@repository_dir, parser.referenced_files)
       failed_downloads.concat(@downloader.download_multi(to_download, ignore_errors: true)) unless to_download.empty?
+
+      # remove stale files
+      Dir.chdir(@repository_dir) do
+        all_rpms.keys.each do |f|
+          @logger.info "Removing #{f}"
+          File.delete(f)
+        end
+      end
     end
 
     raise _('Failed to download %{failed_count} files') % { failed_count: failed_downloads.size } unless failed_downloads.empty?
